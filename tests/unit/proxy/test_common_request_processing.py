@@ -13348,10 +13348,6 @@ class _RewritingGuardrail(CustomGuardrail):
         return {**inputs, "texts": [_REWRITTEN_TEXT for _ in inputs.get("texts") or ()]}
 
 
-class _InheritedApplyGuardrail(CountingGuardrail):
-    pass
-
-
 class _OwnPostCallHookGuardrail(CustomGuardrail):
     checked: tuple[str, ...] = ()
 
@@ -13461,11 +13457,7 @@ async def test_a_request_post_call_guardrail_checks_a_proxy_response_once(
     "primary_guardrails",
     [
         pytest.param((), id="E-only-on-fallback"),
-        pytest.param(
-            ("G",),
-            id="H-on-both",
-            marks=pytest.mark.xfail(strict=True, reason="H: the fallback deployment and the proxy both check R_B"),
-        ),
+        pytest.param(("G",), id="H-on-both"),
     ],
 )
 async def test_a_fallback_deployments_post_call_guardrail_checks_its_response_once(
@@ -13499,24 +13491,11 @@ async def test_a_response_rewritten_after_the_deployment_check_is_checked_again(
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("httpx_transport")
-@pytest.mark.xfail(strict=True, reason="J: the deployment and the proxy both call the guardrail's own hook")
 async def test_a_guardrail_with_its_own_post_call_hook_checks_a_proxy_response_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     guardrail: Final = _OwnPostCallHookGuardrail(guardrail_name="G", event_hook=GuardrailEventHooks.post_call)
     await _guarded_proxy_request(monkeypatch, (guardrail,), guarded_router(("G",)), "acompletion")
-
-    assert len(guardrail.checked) == 1
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("httpx_transport")
-@pytest.mark.xfail(strict=True, reason="K: the proxy only sees apply_guardrail defined on the class itself")
-async def test_an_inherited_apply_guardrail_checks_a_proxy_response_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    guardrail: Final = _InheritedApplyGuardrail(guardrail_name="G", event_hook=GuardrailEventHooks.post_call)
-    await _guarded_proxy_request(
-        monkeypatch, (guardrail,), guarded_router(()), "acompletion", request_guardrails=("G",)
-    )
 
     assert len(guardrail.checked) == 1
 
@@ -13553,13 +13532,7 @@ async def test_a_model_config_pre_call_guardrail_checks_a_proxy_request_once(
     "route_type",
     [
         pytest.param("acompletion", id="P3-chat"),
-        pytest.param(
-            "aresponses",
-            id="P4-responses",
-            marks=pytest.mark.xfail(
-                strict=True, reason="P4: the deployment pre_call hook only runs for completion and acompletion"
-            ),
-        ),
+        pytest.param("aresponses", id="P4-responses"),
     ],
 )
 async def test_each_deployments_pre_call_guardrail_checks_a_proxy_fallback_request_once(

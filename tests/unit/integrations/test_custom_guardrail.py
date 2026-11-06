@@ -3893,9 +3893,6 @@ async def _guarded_sdk_request(
     return text
 
 
-_D_SDK_STREAM: Final = pytest.mark.xfail(strict=True, reason="D: nothing checks a stream outside the proxy")
-
-
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("httpx_transport")
 @pytest.mark.parametrize(
@@ -3905,10 +3902,10 @@ _D_SDK_STREAM: Final = pytest.mark.xfail(strict=True, reason="D: nothing checks 
         pytest.param("sdk_call", "aresponses", False, id="C-call-responses"),
         pytest.param("sdk_router", "acompletion", False, id="C-router-chat"),
         pytest.param("sdk_router", "aresponses", False, id="C-router-responses"),
-        pytest.param("sdk_call", "acompletion", True, id="D-call-chat-stream", marks=_D_SDK_STREAM),
-        pytest.param("sdk_call", "aresponses", True, id="D-call-responses-stream", marks=_D_SDK_STREAM),
-        pytest.param("sdk_router", "acompletion", True, id="D-router-chat-stream", marks=_D_SDK_STREAM),
-        pytest.param("sdk_router", "aresponses", True, id="D-router-responses-stream", marks=_D_SDK_STREAM),
+        pytest.param("sdk_call", "acompletion", True, id="D-call-chat-stream"),
+        pytest.param("sdk_call", "aresponses", True, id="D-call-responses-stream"),
+        pytest.param("sdk_router", "acompletion", True, id="D-router-chat-stream"),
+        pytest.param("sdk_router", "aresponses", True, id="D-router-responses-stream"),
     ],
 )
 async def test_a_post_call_guardrail_checks_an_sdk_response_once(
@@ -3921,28 +3918,15 @@ async def test_a_post_call_guardrail_checks_an_sdk_response_once(
     assert len(guardrail.checked) == 1
 
 
-_NON_CHAT_DEPLOYMENT_PRE_CALL: Final = "the deployment pre_call hook only runs for completion and acompletion"
-
-
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("httpx_transport")
 @pytest.mark.parametrize(
     ("caller", "route_type"),
     [
         pytest.param("sdk_call", "acompletion", id="P7-call-chat"),
-        pytest.param(
-            "sdk_call",
-            "aresponses",
-            id="P8-call-responses",
-            marks=pytest.mark.xfail(strict=True, reason=f"P8: {_NON_CHAT_DEPLOYMENT_PRE_CALL}"),
-        ),
+        pytest.param("sdk_call", "aresponses", id="P8-call-responses"),
         pytest.param("sdk_router", "acompletion", id="P9-router-chat"),
-        pytest.param(
-            "sdk_router",
-            "aresponses",
-            id="P10-router-responses",
-            marks=pytest.mark.xfail(strict=True, reason=f"P10: {_NON_CHAT_DEPLOYMENT_PRE_CALL}"),
-        ),
+        pytest.param("sdk_router", "aresponses", id="P10-router-responses"),
     ],
 )
 async def test_a_pre_call_guardrail_checks_an_sdk_request_once(
@@ -3960,11 +3944,7 @@ async def test_a_pre_call_guardrail_checks_an_sdk_request_once(
     "route_type",
     [
         pytest.param("acompletion", id="P11-chat"),
-        pytest.param(
-            "aresponses",
-            id="P12-responses",
-            marks=pytest.mark.xfail(strict=True, reason=f"P12: {_NON_CHAT_DEPLOYMENT_PRE_CALL}"),
-        ),
+        pytest.param("aresponses", id="P12-responses"),
     ],
 )
 async def test_each_deployments_pre_call_guardrail_checks_an_sdk_router_fallback_request_once(

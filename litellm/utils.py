@@ -1143,6 +1143,12 @@ def _transcription_runs_unstreamed(
     )
 
 
+def guard_sdk_stream(stream: object, request_data: dict[str, object]) -> object:
+    from litellm.integrations.custom_guardrail import guard_sdk_stream as guard
+
+    return guard(stream, request_data)
+
+
 def _guardrail_view_of_requested_stream(call_kwargs: Mapping[str, object]) -> dict[str, object]:
     from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming
 
@@ -2541,9 +2547,12 @@ def client(original_function):
                         start_time=start_time,
                         end_time=end_time,
                     )
-                    return _llm_caching_handler.wrap_streaming_result_for_cache(
-                        result=result,
-                        call_type=call_type,
+                    return guard_sdk_stream(
+                        _llm_caching_handler.wrap_streaming_result_for_cache(
+                            result=result,
+                            call_type=call_type,
+                        ),
+                        kwargs,
                     )
             elif call_type in (CallTypes.arealtime.value, CallTypes.aresponses_websocket.value):
                 return result

@@ -1279,9 +1279,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 # Provider passthrough routes (e.g. /bedrock/.../converse-stream) map to no call type, and their
                 # frames carry none; the logging object names the passthrough, as on the non-streaming path.
                 if call_type is None:
-                    logging_call_type = getattr(typed_request_data.get("litellm_logging_obj"), "call_type", None)
-                    if logging_call_type == CallTypes.allm_passthrough_route.value:
-                        call_type = logging_call_type
+                    call_type = _logged_call_type(typed_request_data)
 
                 # If call type not supported, just pass through all chunks
                 if call_type is None or CallTypes(call_type) not in mappings:

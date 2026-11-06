@@ -1,10 +1,11 @@
 import contextvars
 import copy
+import functools
 import hashlib
 import json
 import os
 import secrets
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Iterable, Mapping, Sequence
 from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
@@ -37,6 +38,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import (
     CallTypes,
+    CallTypesLiteral,
     GenericGuardrailAPIInputs,
     GuardrailStatus,
     GuardrailTracingDetail,
@@ -129,6 +131,9 @@ def _user_api_key_auth_from_request(request_data: Mapping[str, object]) -> "User
 
     metadata: Final = request_data.get(get_metadata_variable_name_from_kwargs(request_data))
     stamped: Final[Mapping[str, object]] = metadata if isinstance(metadata, dict) else {}
+    stamped_auth: Final = stamped.get("user_api_key_auth")
+    if isinstance(stamped_auth, UserAPIKeyAuth):
+        return stamped_auth
 
     def stamped_str(field: str) -> str | None:
         value: Final = stamped.get(field)
@@ -321,6 +326,38 @@ def _response_fingerprint(response: object) -> str | None:
     except (TypeError, ValueError):
         return None
     return hashlib.sha256(dumped.encode()).hexdigest()
+
+
+_CHECKED_REQUEST: Final = TypeAdapter(dict[str, object])
+_RESPONSE_GUARDRAIL_CHECKS_KEY: Final = "guardrail_checks"
+
+
+def _response_hidden_params(response: object) -> dict[str, object] | None:
+    hidden: Final = (
+        response.get("_hidden_params") if isinstance(response, dict) else getattr(response, "_hidden_params", None)
+    )
+    return hidden if isinstance(hidden, dict) else None
+
+
+def _write_response_marker(response: object, marker: str | None) -> None:
+    """Record a check on the response itself, so it survives the router copying request metadata per hop."""
+    if marker is None:
+        return
+    hidden: Final = _response_hidden_params(response)
+    if hidden is None:
+        return
+    recorded: Final = hidden.get(_RESPONSE_GUARDRAIL_CHECKS_KEY)
+    hidden[_RESPONSE_GUARDRAIL_CHECKS_KEY] = (
+        (*recorded, marker) if isinstance(recorded, tuple) and marker not in recorded else (marker,)
+    )
+
+
+def _response_carries_marker(response: object, marker: str | None) -> bool:
+    hidden: Final = _response_hidden_params(response)
+    if marker is None or hidden is None:
+        return False
+    recorded: Final = hidden.get(_RESPONSE_GUARDRAIL_CHECKS_KEY)
+    return isinstance(recorded, tuple) and marker in recorded
 
 
 _REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
@@ -1023,8 +1060,11 @@ class CustomGuardrail(CustomLogger):
             and cls.async_logging_hook is CustomGuardrail.async_logging_hook
         )
 
+    def _runs_through_unified_guardrail(self) -> bool:
+        return self.uses_apply_guardrail_interface() and not self.use_native_lifecycle_hooks
+
     def _deployment_hook_target(self) -> "CustomLogger":
-        if not self.uses_apply_guardrail_interface() or self.use_native_lifecycle_hooks:
+        if not self._runs_through_unified_guardrail():
             return self
         try:
             from litellm.proxy.utils import unified_guardrail
@@ -1050,26 +1090,26 @@ class CustomGuardrail(CustomLogger):
         if self.should_run_guardrail(data=kwargs, event_type=GuardrailEventHooks.pre_call) is not True:
             return kwargs
 
-        # CHECK IF GUARDRAIL REJECTS THE REQUEST
-        if call_type == CallTypes.completion or call_type == CallTypes.acompletion:
-            target: Final = self._deployment_hook_target()
-            if target is not self:
-                kwargs["guardrail_to_apply"] = self
-            try:
-                result: Final = await target.async_pre_call_hook(
-                    user_api_key_dict=_user_api_key_auth_from_request(kwargs),
-                    cache=dc,
-                    data=kwargs,
-                    call_type="completion" if call_type == CallTypes.completion else "acompletion",
-                )
-            finally:
-                self._record_deployment_hook_run(kwargs)
+        if call_type is None:
+            return kwargs
+        target: Final = self._deployment_hook_target()
+        if target is self and call_type not in (CallTypes.completion, CallTypes.acompletion):
+            return kwargs
+        if target is not self:
+            kwargs["guardrail_to_apply"] = self
+        try:
+            result: Final = await target.async_pre_call_hook(
+                user_api_key_dict=_user_api_key_auth_from_request(kwargs),
+                cache=dc,
+                data=kwargs,
+                call_type=cast(CallTypesLiteral, call_type.value),
+            )
+        finally:
+            kwargs.pop("guardrail_to_apply", None)
+            self._record_deployment_hook_run(kwargs)
 
-            if result is not None and isinstance(result, dict):
-                result_messages: Final = result.get("messages")
-                if result_messages is not None:  # update for any pii / masking logic
-                    kwargs["messages"] = result_messages
-
+        if isinstance(result, dict) and result is not kwargs:
+            kwargs.update(_CHECKED_REQUEST.validate_python(result))
         return kwargs
 
     async def async_pre_call_hook_on_messages(
@@ -1153,11 +1193,13 @@ class CustomGuardrail(CustomLogger):
             )
 
         returned: Final = result if self._is_valid_response_type(result) else None
-        if target is not self:
-            _write_marker(
-                cast("dict[str, object]", request_data),  # cast-ok: proxy request payloads are str-keyed
-                self._post_call_check_marker(returned if returned is not None else response),
-            )
+        checked: Final = returned if returned is not None else response
+        marker: Final = self._post_call_check_marker(checked)
+        _write_marker(
+            cast("dict[str, object]", request_data),  # cast-ok: proxy request payloads are str-keyed
+            marker,
+        )
+        _write_response_marker(checked, marker)
         return returned
 
     def _post_call_check_marker(self, response: object) -> str | None:
@@ -1166,7 +1208,8 @@ class CustomGuardrail(CustomLogger):
 
     def post_call_already_checked(self, data: Mapping[str, object], response: object) -> bool:
         """Whether a deployment-level hook of this request already ran this guardrail on this exact response."""
-        return _request_carries_marker(data, self._post_call_check_marker(response))
+        marker: Final = self._post_call_check_marker(response)
+        return _request_carries_marker(data, marker) or _response_carries_marker(response, marker)
 
     async def async_logging_hook(
         self,
@@ -2005,3 +2048,60 @@ def log_guardrail_information(func):
 
     vars(wrapper)[LOGS_GUARDRAIL_INFORMATION_MARKER] = True
     return wrapper
+
+
+class GuardedStream:
+    """A direct SDK stream whose chunks pass through the request's post_call guardrails before the caller sees them."""
+
+    def __init__(self, stream: object, guarded: AsyncGenerator[object, None]) -> None:
+        self._stream: Final = stream
+        self._guarded: Final = guarded
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._stream, name)
+
+    def __aiter__(self) -> "GuardedStream":
+        return self
+
+    async def __anext__(self) -> object:
+        return await self._guarded.__anext__()
+
+    async def aclose(self) -> None:
+        await self._guarded.aclose()
+
+
+def guard_sdk_stream(stream: object, request_data: dict[str, object]) -> object:
+    """
+    Wrap a stream the SDK returns to a direct caller in that request's post_call guardrails.
+
+    The proxy wraps the streams it serves itself, so a request it stamped is returned as is.
+    """
+    import litellm
+
+    if not isinstance(stream, AsyncIterable):
+        return stream
+    user_api_key_dict: Final = _user_api_key_auth_from_request(request_data)
+    if user_api_key_dict.request_route is not None:
+        return stream
+    guardrails: Final = tuple(
+        callback
+        for callback in litellm.callbacks
+        if isinstance(callback, CustomGuardrail)
+        and callback.runs_post_call_deployment_hook(request_data)
+        and callback._runs_through_unified_guardrail()  # pyright: ignore[reportPrivateUsage]  # same module
+    )
+    if not guardrails:
+        return stream
+    from litellm.proxy.utils import unified_guardrail
+
+    guarded: Final = functools.reduce(
+        lambda inner, guardrail: unified_guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=inner,
+            request_data=request_data,
+            guardrail_to_apply=guardrail,
+        ),
+        guardrails,
+        cast(AsyncGenerator[object, None], stream),
+    )
+    return GuardedStream(stream, guarded)
