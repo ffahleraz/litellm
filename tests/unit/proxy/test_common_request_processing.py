@@ -96,13 +96,10 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     team_member_budget_entity_id,
 )
 from litellm.proxy.utils import ProxyLogging
-from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 from litellm.responses.mcp.parked_stream_dispatch import IN_FLIGHT_ROUND
 from litellm.router import Router
-from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import GenericGuardrailAPIInputs
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.utils import ModelResponseListIterator
 from litellm.litellm_core_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
@@ -5218,9 +5215,7 @@ class TestHandleLLMApiExceptionProviderOverload:
         assert proxy_exc.type == "internal_server_error"
         assert proxy_exc.to_dict()["code"] == "500"
 
-    async def test_openai_route_answers_wrapped_provider_overload_as_503(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_openai_route_answers_wrapped_provider_overload_as_503(self, monkeypatch: pytest.MonkeyPatch) -> None:
         original: Final = InternalServerError(
             message="Overloaded",
             llm_provider="anthropic",
@@ -13162,9 +13157,9 @@ _OPENAI_RESPONSES_REPLY: Final = {
     "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
 }
 _OPENAI_RESPONSES_SSE: Final = (
-    f'data: {json.dumps({"type": "response.created", "sequence_number": 0, "response": {**_OPENAI_RESPONSES_REPLY, "status": "in_progress", "output": []}})}\n\n'
+    f"data: {json.dumps({'type': 'response.created', 'sequence_number': 0, 'response': {**_OPENAI_RESPONSES_REPLY, 'status': 'in_progress', 'output': []}})}\n\n"
     'data: {"type":"response.output_text.delta","sequence_number":1,"item_id":"msg_1","output_index":0,"content_index":0,"delta":"hi"}\n\n'
-    f'data: {json.dumps({"type": "response.completed", "sequence_number": 2, "response": _OPENAI_RESPONSES_REPLY})}\n\n'
+    f"data: {json.dumps({'type': 'response.completed', 'sequence_number': 2, 'response': _OPENAI_RESPONSES_REPLY})}\n\n"
 )
 
 
@@ -13181,7 +13176,9 @@ def _openai_reply(json_reply: dict[str, object], sse_reply: str) -> Callable[[ht
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
-@pytest.mark.parametrize(("route_type", "path", "body"), _GUARDED_ROUTES, ids=[route for route, _, _ in _GUARDED_ROUTES])
+@pytest.mark.parametrize(
+    ("route_type", "path", "body"), _GUARDED_ROUTES, ids=[route for route, _, _ in _GUARDED_ROUTES]
+)
 @pytest.mark.usefixtures("httpx_transport")
 async def test_a_model_level_post_call_guardrail_runs_once_per_proxy_request(
     monkeypatch: pytest.MonkeyPatch, route_type: str, path: str, body: dict[str, object], stream: bool
@@ -13319,7 +13316,6 @@ async def test_a_post_call_guardrail_attached_only_to_the_fallback_deployment_ru
     assert primary.called
     assert "hi" in json.dumps(response if isinstance(response, dict) else response.model_dump())
     assert guardrail.evaluations == 1
-||||||| parent of f9fe12bf39 (test(guardrails): count guardrail runs per layer for proxy and SDK paths)
 
 
 _REWRITTEN_TEXT: Final = "rewritten by the proxy"
@@ -13421,19 +13417,14 @@ async def _guarded_proxy_request(
     return text
 
 
-_A_IS_LIT_10481: Final = pytest.mark.xfail(
-    strict=True, reason="A, LIT-10481: deployment and proxy post_call both check the same response"
-)
-
-
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("httpx_transport")
 @pytest.mark.parametrize(
     ("route_type", "stream"),
     [
-        pytest.param("acompletion", False, id="A-chat", marks=_A_IS_LIT_10481),
-        pytest.param("aresponses", False, id="A-responses", marks=_A_IS_LIT_10481),
-        pytest.param("anthropic_messages", False, id="A-messages", marks=_A_IS_LIT_10481),
+        pytest.param("acompletion", False, id="A-chat"),
+        pytest.param("aresponses", False, id="A-responses"),
+        pytest.param("anthropic_messages", False, id="A-messages"),
         pytest.param("acompletion", True, id="B-chat-stream"),
         pytest.param("aresponses", True, id="B-responses-stream"),
         pytest.param("anthropic_messages", True, id="B-messages-stream"),
@@ -13532,7 +13523,6 @@ async def test_an_inherited_apply_guardrail_checks_a_proxy_response_once(monkeyp
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("httpx_transport")
-@pytest.mark.xfail(strict=True, reason="L: any guardrails list on the deployment lets a default_on guardrail run there")
 async def test_a_default_on_post_call_guardrail_checks_once_when_the_model_lists_another(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
